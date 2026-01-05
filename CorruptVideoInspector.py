@@ -1,6 +1,7 @@
 # pylint: disable=line-too-long, missing-function-docstring, missing-class-docstring, missing-module-docstring
 import csv
 import os
+import re
 import subprocess
 import tkinter as tk
 import platform
@@ -285,6 +286,11 @@ def inspect_video_files(directory, video_list, tkinter_window, listbox_completed
                 count += 1
                 continue
 
+            def update_listbox_processing(idx=count):
+                listbox_completed_videos.itemconfig(idx, bg='yellow')
+                listbox_completed_videos.see(idx)
+            tkinter_window.after(0, update_listbox_processing)
+
             start_time = time.time()
 
             global g_progress
@@ -298,22 +304,38 @@ def inspect_video_files(directory, video_list, tkinter_window, listbox_completed
             ffmpeg_path = get_ffmpeg_path()
             global g_ffmpeg_pid
             global g_ffmpeg_pid_var
-            if is_mac_os():
-                cmd = [ffmpeg_path, '-v', 'error', '-i', video.full_filepath, '-f', 'null', '-']
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                g_ffmpeg_pid = proc.pid
-                g_ffmpeg_pid_var.set(f"FFMPEG PID: {g_ffmpeg_pid}")
-            elif is_windows_os():
-                cmd = [ffmpeg_path, '-v', 'error', '-i', video.full_filepath, '-f', 'null', '-']
-                # Use CREATE_NO_WINDOW to prevent console flickering on Windows
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=0x08000000)
-                g_ffmpeg_pid = proc.pid
-                g_ffmpeg_pid_var.set(f"FFMPEG PID: {g_ffmpeg_pid}")
-            elif is_linux_os():
-                cmd = [ffmpeg_path, '-v', 'error', '-i', video.full_filepath, '-f', 'null', '-']
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                g_ffmpeg_pid = proc.pid
-                g_ffmpeg_pid_var.set(f"FFMPEG PID: {g_ffmpeg_pid}")
+
+            duration_str = "00:00:00"
+            try:
+                dur_cmd = [ffmpeg_path, '-i', video.full_filepath]
+                dur_kwargs = {}
+                if is_windows_os():
+                    dur_kwargs['creationflags'] = 0x08000000
+                dur_proc = subprocess.Popen(dur_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', **dur_kwargs)
+                _, dur_err = dur_proc.communicate()
+                dur_match = re.search(r"Duration:\s*(\d{2}:\d{2}:\d{2})", dur_err)
+                if dur_match:
+                    duration_str = dur_match.group(1)
+            except Exception:
+                pass
+            
+            cmd = [ffmpeg_path, '-v', 'error', '-progress', 'pipe:1', '-i', video.full_filepath, '-f', 'null', '-']
+            
+            popen_kwargs = {}
+            if is_windows_os():
+                popen_kwargs['creationflags'] = 0x08000000
+            
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', **popen_kwargs)
+            g_ffmpeg_pid = proc.pid
+            g_ffmpeg_pid_var.set(f"FFMPEG PID: {g_ffmpeg_pid}")
+
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                if "out_time=" in line:
+                    time_str = line.split('=')[1].strip().split('.')[0]
+                    g_currently_processing.set(f"Current File Progress ({time_str} / {duration_str})")
 
             output, error = proc.communicate()
             return_code = proc.returncode
@@ -402,12 +424,15 @@ def start_program(directory, video_list, root, index_start, log_file):
     try:
         clear_window(root)
 
-        label_progress_text = tk.Label(root, text="Progress:", font=('Helvetica Bold', 18))
-        label_progress_text.pack(fill=tk.X, pady=10)
+        progress_frame = tk.Frame(root)
+        progress_frame.pack(pady=10)
+
+        label_progress_text = tk.Label(progress_frame, text="Progress:", font=('Helvetica Bold', 30))
+        label_progress_text.pack(side=tk.LEFT, padx=(0, 10))
 
         g_progress.set("0%")
-        label_progress_var = tk.Label(root, textvariable=g_progress, font=('Helvetica', 50))
-        label_progress_var.pack(fill=tk.X, pady=(0, 10))
+        label_progress_var = tk.Label(progress_frame, textvariable=g_progress, font=('Helvetica Bold', 30))
+        label_progress_var.pack(side=tk.LEFT)
 
         progress_bar = ttk.Progressbar(root, orient="horizontal", mode="indeterminate", length=300)
         progress_bar.pack(pady=(0, 20))
