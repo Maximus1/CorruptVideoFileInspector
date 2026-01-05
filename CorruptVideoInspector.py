@@ -2,15 +2,20 @@ import csv
 import os
 import subprocess
 import tkinter as tk
-import shlex
 import platform
 import psutil
-import signal
 import time
 from threading import Thread
 from tkinter import filedialog
 from tkinter import ttk
-from tkmacosx import Button as MacButton
+from tkinter import messagebox
+if 'Darwin' in platform.system():
+    try:
+        from tkmacosx import Button as MacButton
+    except ImportError:
+        MacButton = tk.Button
+else:
+    MacButton = tk.Button
 from datetime import datetime
 
 VIDEO_EXTENSIONS = ['.mp4', '.avi', '.mov', '.wmv', '.mkv', '.flv', '.webm', '.m4v', '.m4p', '.mpeg', '.mpg', '.3gp', '.3g2']
@@ -23,6 +28,28 @@ class VideoObject():
         self.full_filepath = full_filepath
 
 # ========================= FUNCTIONS ==========================
+
+def clear_window(root):
+    for widget in root.winfo_children():
+        widget.destroy()
+
+def show_initial_ui(root):
+    clear_window(root)
+    label_select_directory = tk.Label(root, wraplength=450, justify="left", text="Select a directory to search for all video files within the chosen directory and all of its containing subdirectories", font=('Helvetica', 16))
+    label_select_directory.pack(fill=tk.X, pady=20, padx=20)
+
+    button_select_directory = tk.Button(root, text="Select Directory", width=20, command=lambda: selectDirectory(root))
+    button_select_directory.pack(pady=20)
+
+def apply_listbox_read_only_bindings(listbox):
+    listbox.bind('<<ListboxSelect>>', lambda e: "break")
+    listbox.bind('<Button-1>', lambda e: "break")
+    listbox.bind('<Button-2>', lambda e: "break")
+    listbox.bind('<Button-3>', lambda e: "break")
+    listbox.bind('<ButtonRelease-1>', lambda e: "break")
+    listbox.bind('<Double-1>', lambda e: "break")
+    listbox.bind('<Double-Button-1>', lambda e: "break")
+    listbox.bind('<B1-Motion>', lambda e: "break")
 
 def isMacOs():
     if 'Darwin' in platform.system():
@@ -39,13 +66,23 @@ def isLinuxOs():
         return True
     return False
 
-def selectDirectory(root, label_select_directory, button_select_directory):
-    # root.withdraw()
+def get_ffmpeg_path():
+    if isMacOs():
+        return './ffmpeg'
+    elif isWindowsOs():
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), 'ffmpeg.exe'))
+    return None
+
+def check_ffmpeg_exists():
+    path = get_ffmpeg_path()
+    if path and os.path.exists(path):
+        return True
+    return False
+
+def selectDirectory(root):
     directory = filedialog.askdirectory()
 
     if len(directory) > 0:
-        label_select_directory.destroy()
-        button_select_directory.destroy()
         afterDirectoryChosen(root, directory)
 
 
@@ -68,68 +105,75 @@ def truncateFilename(input):
     else:
         return input
 
-def countAllVideoFiles(dir):
-    total = 0
-    for root, dirs, files in os.walk(dir):
-        for file in files:
-            if file.lower().endswith(tuple(VIDEO_EXTENSIONS)):
-                total += 1
-    return total
-
-def getAllVideoFiles(dir):
+def find_all_videos(dir):
     videos_found_list = []
     for root, dirs, files in os.walk(dir):
         for file in files:
             if file.lower().endswith(tuple(VIDEO_EXTENSIONS)):
-                videos_found_list.append(file)
-    videos_found_list.sort()
-    index = 1
+                video_obj = VideoObject(file, os.path.join(root, file))
+                videos_found_list.append(video_obj)
+    videos_found_list.sort(key=lambda x: x.filename)
+    return videos_found_list
+
+def countAllVideoFiles(video_list):
+    return len(video_list)
+
+def getAllVideoFiles(video_list):
     sorted_videos_list = []
-    for video in videos_found_list:
-        sorted_videos_list.append(f' {index}:  {video}')
+    index = 1
+    for video in video_list:
+        sorted_videos_list.append(f' {index}:  {video.filename}')
         index += 1
     return sorted_videos_list
 
 def windowsFfmpegCpuCalculationPrimer():
-    # https://psutil.readthedocs.io/en/latest/#psutil.cpu_percent
-    # https://stackoverflow.com/questions/24367424/cpu-percentinterval-none-always-returns-0-regardless-of-interval-value-python
-    process_names = [proc for proc in psutil.process_iter()]
-    for proc in process_names:
-        if "ffmpeg" in proc.name():
-            cpu_usage = proc.cpu_percent()
+    # Diese Funktion wird nicht mehr benötigt, wenn wir ein Intervall nutzen
+    pass
 
-def verify_ffmpeg_still_running(root):
-    ffmpeg_window = tk.Toplevel(root)
-    ffmpeg_window.resizable(False, False)
-    ffmpeg_window.geometry("400x150")
-    ffmpeg_window.title("Verify ffmpeg Status")
-    output = ''
-    cpu_usage = ''
+def verify_ffmpeg_still_running():
+    global g_cpu_status
+    global g_cached_proc
+    global g_ffmpeg_pid
 
-    if isMacOs():
-        proc = subprocess.Popen("ps -Ao comm,pcpu -r | head -n 10 | grep ffmpeg", shell=True, stdout=subprocess.PIPE)
-        output = proc.communicate()[0].decode('utf-8').strip()
-        if "ffmpeg" in output:
-            cpu_usage = output.split()[1]
-            output = f"ffmpeg is currently running.\nffmpeg is currently using {cpu_usage}% of CPU"
-        else:
-            output = "ffmpeg is NOT currently running!"
-    if isWindowsOs():
-        windowsFfmpegCpuCalculationPrimer()
-        found = False
-        process_names = [proc for proc in psutil.process_iter()]
-        for proc in process_names:
-            if "ffmpeg" in proc.name():
-                cpu_usage = proc.cpu_percent()
+    cpu_usage = 0.0
+    found = False
+    output = "CPU: ---"
+    num_cores = psutil.cpu_count() or 1
+
+    if g_ffmpeg_pid:
+        try:
+            if not g_cached_proc or g_cached_proc.pid != g_ffmpeg_pid:
+                g_cached_proc = psutil.Process(g_ffmpeg_pid)
+
+            if g_cached_proc.is_running() and "ffmpeg" in g_cached_proc.name().lower():
+                raw_cpu = g_cached_proc.cpu_percent(interval=None)
+                cpu_usage = round(raw_cpu / num_cores, 1)
+                output = f"CPU: {cpu_usage}% (ffmpeg)"
                 found = True
-                break
-        if found:
-            output = f"ffmpeg is currently running.\nffmpeg is currently using {cpu_usage}% of CPU"
-        else:
-            output = "ffmpeg is NOT currently running!"
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            g_cached_proc = None
 
-    label_ffmpeg_result = tk.Label(ffmpeg_window, width=375, text=output, font=('Helvetica', 14))
-    label_ffmpeg_result.pack(fill=tk.X, pady=20)
+    if not found:
+        # Fallback: Suche alle ffmpeg Prozesse, aber nur die aus unserem Verzeichnis
+        ffmpeg_path = get_ffmpeg_path()
+        for proc in psutil.process_iter(['name', 'exe']):
+            try:
+                if "ffmpeg" in proc.info['name'].lower():
+                    # Prüfe ob es "unser" ffmpeg ist (falls möglich)
+                    if ffmpeg_path and proc.info['exe'] and os.path.normpath(proc.info['exe']) == os.path.normpath(ffmpeg_path):
+                        raw_cpu = proc.cpu_percent(interval=0.1)
+                        cpu_usage = round(raw_cpu / num_cores, 1)
+                        if cpu_usage > 0:
+                            output = f"CPU: {cpu_usage}% (ffmpeg)"
+                            found = True
+                            break
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+    if not found:
+        output = "CPU: ---"
+
+    g_cpu_status.set(output)
 
 def kill_ffmpeg_warning(root, log_file):
     ffmpeg_kill_window = tk.Toplevel(root)
@@ -140,39 +184,45 @@ def kill_ffmpeg_warning(root, log_file):
         ffmpeg_kill_window.geometry("400x400")
     ffmpeg_kill_window.title("Safely Quit Program")
 
-    label_ffmpeg_kill = tk.Label(ffmpeg_kill_window, wraplength=375, width=375, text="This application spawns a subprocess named 'ffmpeg'. If this program is quit using the 'X' button, for example, the 'ffmpeg' subprocess will continue to run in the background of the host computer, draining the CPU resources. Clicking the button below will terminate the 'ffmpeg' subprocess and safely quit the application. This will prematurely end all video processing. Only do this if you want to safely exit the program and clean all subprocesses", font=('Helvetica', 14))
+    label_ffmpeg_kill = tk.Label(ffmpeg_kill_window, wraplength=375, width=375, text="This application spawns a subprocess named 'ffmpeg'. Clicking the button below will terminate the 'ffmpeg' subprocess and safely quit the application. This will prematurely end all video processing.", font=('Helvetica', 14))
     label_ffmpeg_kill.pack(fill=tk.X, pady=20)
 
-    if isMacOs():
-        # https://stackoverflow.com/questions/1529847/how-to-change-the-foreground-or-background-colour-of-a-tkinter-button-on-mac-os
-        button_kill_ffmpeg = MacButton(ffmpeg_kill_window, background='#E34234', borderless=1, foreground='white', text="Terminate Program", width=500, command=lambda: kill_ffmpeg(root, log_file))
-        button_kill_ffmpeg.pack(pady=10)
-    elif isWindowsOs():
-        button_kill_ffmpeg = tk.Button(ffmpeg_kill_window, background='#E34234', foreground='white', text="Terminate Program", width=200, command=lambda: kill_ffmpeg(root, log_file))
-        button_kill_ffmpeg.pack(pady=10)
+    button_kill_ffmpeg = tk.Button(ffmpeg_kill_window, background='#E34234', foreground='white', text="Terminate Program", width=25, command=lambda: kill_ffmpeg(root, log_file))
+    button_kill_ffmpeg.pack(pady=10)
 
 def kill_ffmpeg(root, log_file):
-    if isMacOs():
+    log_file.write(f'---USER MANUALLY TERMINATED PROGRAM---\n')
+    log_file.flush()
+
+    global g_ffmpeg_pid
+    terminated = False
+
+    if g_ffmpeg_pid:
         try:
-            global g_mac_pid
-            log_file.write(f'---USER MANUALLY TERMINATED PROGRAM---\n')
-            os.killpg(os.getpgid(g_mac_pid), signal.SIGTERM)
-        except Exception as e:
-            log_file.write(f'ERROR in "kill_ffmpeg": {e}\n')
-            log_file.flush()
-    elif isWindowsOs():
-        try:
-            global g_windows_pid
-            # os.kill(g_windows_pid, signal.CTRL_C_EVENT)
-            # subprocess.Popen("taskkill /F /T /PID %i" % g_windows_pid, shell=True)
-            log_file.write(f'---USER MANUALLY TERMINATED PROGRAM---\n')
-            for proc in psutil.process_iter():
-                if proc.name() == "ffmpeg.exe" or proc.name() == "CorruptVideoInspector.exe":
-                    proc.kill()
-            log_file.flush()
-        except Exception as e:
-            log_file.write(f'ERROR in "kill_ffmpeg": {e}\n')
-            log_file.flush()
+            parent = psutil.Process(g_ffmpeg_pid)
+            for child in parent.children(recursive=True):
+                child.kill()
+            parent.kill()
+            terminated = True
+        except psutil.NoSuchProcess:
+            # Prozess bereits beendet, alles ok
+            terminated = True
+        except psutil.AccessDenied as e:
+            log_file.write(f'Could not kill via PID {g_ffmpeg_pid}: {e}\n')
+
+    if not terminated:
+        # Fallback: Nur ffmpeg Prozesse aus unserem Verzeichnis beenden
+        ffmpeg_path = get_ffmpeg_path()
+        for proc in psutil.process_iter(['name', 'exe']):
+            try:
+                if "ffmpeg" in proc.info['name'].lower():
+                    # Nur killen, wenn es exakt unser Binary ist
+                    if ffmpeg_path and proc.info['exe'] and os.path.normpath(proc.info['exe']) == os.path.normpath(ffmpeg_path):
+                        proc.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    # Beende das Hauptprogramm
+    os._exit(0)
 
 
 def estimatedTime(total_videos):
@@ -190,11 +240,14 @@ def estimatedTime(total_videos):
 def calculateProgress(count, total):
     return "{0}%".format(int((count / total) * 100))
 
-def inspectVideoFiles(directory, tkinter_window, listbox_completed_videos, index_start, log_file, progress_bar):
-    try:
-        global g_count
-        global g_currently_processing
+def inspectVideoFiles(directory, video_list, tkinter_window, listbox_completed_videos, index_start, log_file, progress_bar, button_kill_ffmpeg):
+    global g_count
+    global g_currently_processing
+    global g_progress
+    global g_ffmpeg_pid
+    global g_ffmpeg_pid_var
 
+    try:
         log_file.write('CREATED: _Logs.log\n')
         log_file.write('CREATED: _Results.csv\n')
         log_file.write('=================================================================\n')
@@ -202,161 +255,139 @@ def inspectVideoFiles(directory, tkinter_window, listbox_completed_videos, index
 
         # CSV Results file
         results_file_path = os.path.join(directory, '_Results.csv')
-        results_file_exists = os.path.isfile(results_file_path)
-        if results_file_exists:
+        if os.path.isfile(results_file_path):
             os.remove(results_file_path)
 
-        results_file = open(results_file_path, 'a+', encoding="utf8", newline='')
-        results_file_writer = csv.writer(results_file)
-
-        header = ['Video File', 'Corrupted']
-        results_file_writer.writerow(header)
-        results_file.flush()
-
-        totalVideoFiles = countAllVideoFiles(directory)
-        start_time = datetime.now().strftime('%Y-%m-%d %I:%M %p')
-
-        log_file.write(f'DIRECTORY: {directory}\n')
-        log_file.write(f'TOTAL VIDEO FILES FOUND: {totalVideoFiles}\n')
-        log_file.write(f'STARTING FROM VIDEO INDEX: {index_start}\n')
-        log_file.write(f'START TIME: {start_time}\n')
-        log_file.write('=================================================================\n')
-        log_file.write('(DURATION IS IN HOURS:MINUTES:SECONDS)\n')
-        log_file.flush()
-
-        all_videos_found = []
-        for root, dirs, files in os.walk(directory):
-            for filename in files:
-                if filename.lower().endswith(tuple(VIDEO_EXTENSIONS)):
-                    video_obj = VideoObject(filename, os.path.join(root, filename))
-                    all_videos_found.append(video_obj)
-
-        # Alphabetize list
-        all_videos_found.sort(key=lambda x: x.filename)
-
-        count = 0
-        for video in all_videos_found:
-            if (index_start > count + 1):
-                count += 1
-                continue
-
-            start_time = time.time()
-
-            global g_progress
-            g_progress.set(calculateProgress(count, totalVideoFiles))
-            tkinter_window.update()
-
-            g_count.set(f"{count + 1} / {totalVideoFiles}")
-            tkinter_window.update()
-
-            g_currently_processing.set(truncateFilename(video.filename))
-            tkinter_window.update()
-
-            proc = ''
-            if isMacOs():
-                global g_mac_pid
-                proc = subprocess.Popen(f'./ffmpeg -v error -i {shlex.quote(video.full_filepath)} -f null - 2>&1', shell=True,
-                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                g_mac_pid = proc.pid
-            elif isWindowsOs():
-                global g_windows_pid
-                ffmpeg_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'ffmpeg.exe'))
-                proc = subprocess.Popen(f'"{ffmpeg_path}" -v error -i "{video.full_filepath}" -f null error.log', shell=True,
-                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                g_windows_pid = proc.pid
-            else:
-                # Linux not yet supported
-                exit()
-
-            output, error = proc.communicate()
-
-            # Debug
-            print(f'output= {output}\n')
-            print(f'error= {error}\n')
-
-            row_index = count
-            if (index_start != 1):
-                row_index = (count + 1) - index_start
-
-            ffmpeg_result = ''
-            if isMacOs():
-                ffmpeg_result = output
-            elif isWindowsOs():
-                ffmpeg_result = error
-
-            elapsed_time = time.time() - start_time
-            readable_time = convertTime(elapsed_time)
-            row = ''
-            if not ffmpeg_result:
-                # Healthy
-                print("\033[92m{0}\033[00m".format("HEALTHY -> {}".format(video.filename)), end='\n')  # red
-
-                log_file.write('=================================================================\n')
-                log_file.write(f'{video.filename}\n')
-                log_file.write('STATUS: ✓ HEALTHY ✓\n')
-                log_file.write(f'DURATION: {readable_time}\n')
-                log_file.flush()
-
-                row = [video.filename, 0]
-                listbox_completed_videos.insert(tk.END, f' {video.filename}')
-                listbox_completed_videos.itemconfig(row_index, bg='green')
-                tkinter_window.update()
-            else:
-                # Corrupt
-                print("\033[31m{0}\033[00m".format("CORRUPTED -> {}".format(video.filename)), end='\n')  # red
-
-                log_file.write('=================================================================\n')
-                log_file.write(f'{video.filename}\n')
-                log_file.write('STATUS: X CORRUPT X\n')
-                log_file.write(f'DURATION: {readable_time}\n')
-                log_file.flush()
-
-                row = [video.filename, 1]
-                listbox_completed_videos.insert(tk.END, f' {video.filename}')
-                listbox_completed_videos.itemconfig(row_index, bg='red')
-                tkinter_window.update()
-
-            results_file_writer.writerow(row)
+        with open(results_file_path, 'a+', encoding="utf8", newline='') as results_file:
+            results_file_writer = csv.writer(results_file)
+            header = ['Video File', 'Corrupted']
+            results_file_writer.writerow(header)
             results_file.flush()
 
-            count += 1
+            total_video_files = len(video_list)
+            start_time_str = datetime.now().strftime('%Y-%m-%d %I:%M %p')
 
-            g_progress.set(calculateProgress(count, totalVideoFiles))
-            tkinter_window.update()
+            log_file.write(f'DIRECTORY: {directory}\n')
+            log_file.write(f'TOTAL VIDEO FILES FOUND: {total_video_files}\n')
+            log_file.write(f'STARTING FROM VIDEO INDEX: {index_start}\n')
+            log_file.write(f'START TIME: {start_time_str}\n')
+            log_file.write('=================================================================\n')
+            log_file.write('(DURATION IS IN HOURS:MINUTES:SECONDS)\n')
+            log_file.flush()
 
-        g_count.set("---")
-        g_currently_processing.set("N/A")
-        progress_bar.stop()
-        progress_bar['value'] = 100
-        tkinter_window.update()
+            count = 0
+            processed_count = 0
+            for video in video_list:
+                if (index_start > count + 1):
+                    count += 1
+                    continue
 
-        results_file.flush()
-        results_file.close()
+                start_time_loop = time.time()
+                g_progress.set(calculateProgress(count, total_video_files))
+                g_count.set(f"{count + 1} / {total_video_files}")
+                g_currently_processing.set(truncateFilename(video.filename))
 
-        end_time = datetime.now().strftime('%Y-%m-%d %I:%M %p')
+                proc = None
+                ffmpeg_path = get_ffmpeg_path()
+                if isMacOs():
+                    cmd = [ffmpeg_path, '-v', 'error', '-i', video.full_filepath, '-f', 'null', '-']
+                    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                    g_ffmpeg_pid = proc.pid
+                    g_ffmpeg_pid_var.set(f"FFMPEG PID: {g_ffmpeg_pid}")
+                elif isWindowsOs():
+                    cmd = [ffmpeg_path, '-v', 'error', '-i', video.full_filepath, '-f', 'null', '-']
+                    # Use CREATE_NO_WINDOW to prevent console flickering on Windows
+                    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=0x08000000)
+                    g_ffmpeg_pid = proc.pid
+                    g_ffmpeg_pid_var.set(f"FFMPEG PID: {g_ffmpeg_pid}")
+                else:
+                    # Linux not yet supported
+                    exit()
 
-        print(f'Finished: {end_time}')
-        log_file.write('=================================================================\n')
-        log_file.write(f'SUCCESSFULLY PROCESSED {(totalVideoFiles + 1) - index_start} VIDEO FILES\n')
-        log_file.write(f'END TIME: {end_time}\n')
-        log_file.write('=================================================================\n')
-        log_file.flush()
-        log_file.close()
+                output, error = proc.communicate()
+                return_code = proc.returncode
+
+                # Debug
+                print(f'return_code= {return_code}\n')
+
+                # Eine Datei gilt als korrupt, wenn der Return-Code ungleich 0 ist
+                # oder Fehlermeldungen in stderr/stdout ausgegeben wurden (bei -v error)
+                is_corrupt = (return_code != 0) or (output and output.strip()) or (error and error.strip())
+
+                elapsed_time = time.time() - start_time_loop
+                readable_time = convertTime(elapsed_time)
+                row = []
+                if not is_corrupt:
+                    # Healthy
+                    print("\033[92m{0}\033[00m".format("HEALTHY -> {}".format(video.filename)), end='\n')  # green
+
+                    log_file.write('=================================================================\n')
+                    log_file.write(f'{video.filename}\n')
+                    log_file.write('STATUS: ✓ HEALTHY ✓\n')
+                    log_file.write(f'DURATION: {readable_time}\n')
+                    log_file.flush()
+
+                    row = [video.filename, 0]
+                    def update_listbox_healthy(v=video.filename, idx=processed_count):
+                        listbox_completed_videos.insert(tk.END, f' {v}')
+                        listbox_completed_videos.itemconfig(idx, bg='green')
+                        listbox_completed_videos.see(tk.END)
+                    tkinter_window.after(0, update_listbox_healthy)
+                else:
+                    # Corrupt
+                    print("\033[31m{0}\033[00m".format("CORRUPTED -> {}".format(video.filename)), end='\n')  # red
+
+                    log_file.write('=================================================================\n')
+                    log_file.write(f'{video.filename}\n')
+                    log_file.write('STATUS: X CORRUPT X\n')
+                    log_file.write(f'DURATION: {readable_time}\n')
+                    log_file.flush()
+
+                    row = [video.filename, 1]
+                    def update_listbox_corrupt(v=video.filename, idx=processed_count):
+                        listbox_completed_videos.insert(tk.END, f' {v}')
+                        listbox_completed_videos.itemconfig(idx, bg='red')
+                        listbox_completed_videos.see(tk.END)
+                    tkinter_window.after(0, update_listbox_corrupt)
+
+                results_file_writer.writerow(row)
+                results_file.flush()
+
+                count += 1
+                processed_count += 1
+                g_progress.set(calculateProgress(count, total_video_files))
+
+            g_count.set("---")
+            g_currently_processing.set("N/A")
+            g_ffmpeg_pid_var.set("FFMPEG PID: ---")
+            def finish_ui():
+                progress_bar.stop()
+                progress_bar['value'] = 100
+                # Button Swap: Safely Quit -> Restart
+                if button_kill_ffmpeg:
+                    button_kill_ffmpeg.destroy()
+
+                button_restart = tk.Button(tkinter_window, text="Restart", width=25, command=lambda: show_initial_ui(tkinter_window))
+                button_restart.pack(pady=10)
+
+            tkinter_window.after(0, finish_ui)
+
+            end_time = datetime.now().strftime('%Y-%m-%d %I:%M %p')
+            print(f'Finished: {end_time}')
+            log_file.write('=================================================================\n')
+            log_file.write(f'SUCCESSFULLY PROCESSED {processed_count} VIDEO FILES\n')
+            log_file.write(f'END TIME: {end_time}\n')
+            log_file.write('=================================================================\n')
+            log_file.flush()
     except Exception as e:
         log_file.write(f'ERROR in "inspectVideoFiles" (aka main thread): {e}\n')
         log_file.flush()
+    finally:
+        log_file.close()
 
-def start_program(directory, root, index_start, log_file, label_chosen_directory, label_chosen_directory_var, label_video_count, label_video_count_var, label_index_start, entry_index_input, label_explanation, button_start, listbox_completed_videos):
+def start_program(directory, video_list, root, index_start, log_file):
     try:
-        label_chosen_directory.destroy()
-        label_chosen_directory_var.destroy()
-        label_video_count.destroy()
-        label_video_count_var.destroy()
-        label_index_start.destroy()
-        entry_index_input.destroy()
-        label_explanation.destroy()
-        button_start.destroy()
-        listbox_completed_videos.destroy()
+        clear_window(root)
 
         label_progress_text = tk.Label(root, text="Progress:", font=('Helvetica Bold', 18))
         label_progress_text.pack(fill=tk.X, pady=10)
@@ -382,33 +413,48 @@ def start_program(directory, root, index_start, log_file, label_chosen_directory
 
         listbox_completed_videos = tk.Listbox(root, font=('Helvetica', 16))
         listbox_completed_videos.pack(expand=False, fill=tk.BOTH, side=tk.TOP, padx=10, pady=10)
-        listbox_completed_videos.bind('<<ListboxSelect>>', lambda e: "break")
-        listbox_completed_videos.bind('<Button-1>', lambda e: "break")
-        listbox_completed_videos.bind('<Button-2>', lambda e: "break")
-        listbox_completed_videos.bind('<Button-3>', lambda e: "break")
-        listbox_completed_videos.bind('<ButtonRelease-1>', lambda e: "break")
-        listbox_completed_videos.bind('<Double-1>', lambda e: "break")
-        listbox_completed_videos.bind('<Double-Button-1>', lambda e: "break")
-        listbox_completed_videos.bind('<B1-Motion>', lambda e: "break")
-
-        button_ffmpeg_verify = tk.Button(root, text="ffmpeg Status", width=200, command=lambda: verify_ffmpeg_still_running(root))
-        button_ffmpeg_verify.pack(pady=10)
+        apply_listbox_read_only_bindings(listbox_completed_videos)
 
         if isMacOs():
             # https://stackoverflow.com/questions/1529847/how-to-change-the-foreground-or-background-colour-of-a-tkinter-button-on-mac-os
             button_kill_ffmpeg = MacButton(root, background='#E34234', borderless=1, foreground='white', text="Safely Quit", width=500, command=lambda: kill_ffmpeg_warning(root, log_file))
-            button_kill_ffmpeg.pack(pady=10)
+            button_kill_ffmpeg.pack(pady=(10, 5))
         elif isWindowsOs():
-            button_kill_ffmpeg = tk.Button(root, background='#E34234', foreground='white', text="Safely Quit", width=200, command=lambda: kill_ffmpeg_warning(root, log_file))
-            button_kill_ffmpeg.pack(pady=10)
+            button_kill_ffmpeg = tk.Button(root, background='#E34234', foreground='white', text="Safely Quit", width=25, command=lambda: kill_ffmpeg_warning(root, log_file))
+            button_kill_ffmpeg.pack(pady=(10, 5))
 
-        thread = Thread(target=inspectVideoFiles, args=(directory, root, listbox_completed_videos, index_start, log_file, progress_bar))
+        g_cpu_status.set("CPU: ---")
+        label_cpu_status = tk.Label(root, textvariable=g_cpu_status, font=('Helvetica Bold', 12))
+        label_cpu_status.pack(pady=(0, 5))
+
+        g_ffmpeg_pid_var.set("FFMPEG PID: ---")
+        label_ffmpeg_pid = tk.Label(root, textvariable=g_ffmpeg_pid_var, font=('Helvetica', 10))
+        label_ffmpeg_pid.pack(pady=(0, 10))
+
+        # Automatisches Update des CPU-Status alle 1 Sekunde starten
+        def auto_update_cpu():
+            if thread.is_alive():
+                verify_ffmpeg_still_running()
+                root.after(1000, auto_update_cpu)
+            else:
+                g_cpu_status.set("CPU: Finished")
+
+        thread = Thread(target=inspectVideoFiles, args=(directory, video_list, root, listbox_completed_videos, index_start, log_file, progress_bar, button_kill_ffmpeg))
         thread.start()
+
+        # CPU Update verzögert starten
+        root.after(2000, auto_update_cpu)
     except Exception as e:
         log_file.write(f'ERROR in "start_program": {e}\n')
         log_file.flush()
 
 def afterDirectoryChosen(root, directory):
+    if not check_ffmpeg_exists():
+        messagebox.showerror("FFmpeg Missing", "The FFmpeg binary was not found in the application directory. Please ensure 'ffmpeg' (macOS) or 'ffmpeg.exe' (Windows) is present.")
+        show_initial_ui(root)
+        return
+
+    clear_window(root)
     # Log file
     log_file_path = os.path.join(directory, '_Logs.log')
     log_file_exists = os.path.isfile(log_file_path)
@@ -424,7 +470,8 @@ def afterDirectoryChosen(root, directory):
     log_file.write('=================================================================\n')
     log_file.flush()
 
-    totalVideos = countAllVideoFiles(directory)
+    video_list = find_all_videos(directory)
+    total_videos = len(video_list)
 
     label_chosen_directory = tk.Label(root, text="Chosen directory:", font=('Helvetica Bold', 18))
     label_chosen_directory.pack(fill=tk.X, pady=5)
@@ -433,27 +480,20 @@ def afterDirectoryChosen(root, directory):
 
     label_video_count = tk.Label(root, text="Total number of videos found:", font=('Helvetica Bold', 18))
     label_video_count.pack(fill=tk.X, pady=5)
-    label_video_count_var = tk.Label(root, text=f"{totalVideos}", font=('Helvetica', 16))
+    label_video_count_var = tk.Label(root, text=f"{total_videos}", font=('Helvetica', 16))
     label_video_count_var.pack(fill=tk.X, pady=(5, 20))
 
     listbox_videos_found_with_index = tk.Listbox(root, font=('Helvetica', 16), width=480)
     listbox_videos_found_with_index.pack(padx=10)
-    listbox_videos_found_with_index.bind('<<ListboxSelect>>', lambda e: "break")
-    listbox_videos_found_with_index.bind('<Button-1>', lambda e: "break")
-    listbox_videos_found_with_index.bind('<Button-2>', lambda e: "break")
-    listbox_videos_found_with_index.bind('<Button-3>', lambda e: "break")
-    listbox_videos_found_with_index.bind('<ButtonRelease-1>', lambda e: "break")
-    listbox_videos_found_with_index.bind('<Double-1>', lambda e: "break")
-    listbox_videos_found_with_index.bind('<Double-Button-1>', lambda e: "break")
-    listbox_videos_found_with_index.bind('<B1-Motion>', lambda e: "break")
+    apply_listbox_read_only_bindings(listbox_videos_found_with_index)
 
-    all_videos_found = getAllVideoFiles(directory)
-    for video in all_videos_found:
+    all_videos_found_formatted = getAllVideoFiles(video_list)
+    for video in all_videos_found_formatted:
         listbox_videos_found_with_index.insert(tk.END, video)
     root.update()
 
     label_index_start = tk.Label(root,
-                                 text=f"Start at video index (1 - {countAllVideoFiles(directory)}):",
+                                 text=f"Start at video index (1 - {total_videos}):",
                                  font=('Helvetica Bold', 18))
     label_index_start.pack(fill=tk.X, pady=5)
 
@@ -467,8 +507,8 @@ def afterDirectoryChosen(root, directory):
                                  font=('Helvetica Italic', 12))
     label_explanation.pack(fill=tk.X, pady=5, padx=20)
 
-    if totalVideos > 0:
-        button_start = tk.Button(root, text="Start Inspecting", width=25, command=lambda: start_program(directory, root, int(entry_index_input.get()), log_file, label_chosen_directory, label_chosen_directory_var, label_video_count, label_video_count_var, label_index_start, entry_index_input, label_explanation, button_start, listbox_videos_found_with_index))
+    if total_videos > 0:
+        button_start = tk.Button(root, text="Start Inspecting", width=25, command=lambda: start_program(directory, video_list, root, int(entry_index_input.get()), log_file))
         button_start.pack(pady=20)
     else:
         root.withdraw()
@@ -500,13 +540,11 @@ if isWindowsOs():
 g_progress = tk.StringVar()
 g_count = tk.StringVar()
 g_currently_processing = tk.StringVar()
-g_mac_pid = ''
-g_windows_pid = ''
+g_cpu_status = tk.StringVar()
+g_ffmpeg_pid_var = tk.StringVar()
+g_cached_proc = None
+g_ffmpeg_pid = None
 
-label_select_directory = tk.Label(root, wraplength=450, justify="left", text="Select a directory to search for all video files within the chosen directory and all of its containing subdirectories", font=('Helvetica', 16))
-label_select_directory.pack(fill=tk.X, pady=20, padx=20)
-
-button_select_directory = tk.Button(root, text="Select Directory", width=20, command=lambda: selectDirectory(root, label_select_directory, button_select_directory))
-button_select_directory.pack(pady=20)
+show_initial_ui(root)
 
 root.mainloop()
