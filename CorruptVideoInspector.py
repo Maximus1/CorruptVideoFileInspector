@@ -4,6 +4,7 @@ import os
 import subprocess
 import tkinter as tk
 import platform
+import shutil
 import time
 from threading import Thread
 from tkinter import filedialog
@@ -74,6 +75,8 @@ def get_ffmpeg_path():
         return './ffmpeg'
     elif is_windows_os():
         return os.path.abspath(os.path.join(os.path.dirname(__file__), 'ffmpeg.exe'))
+    elif is_linux_os():
+        return shutil.which('ffmpeg')
     return None
 
 def check_ffmpeg_exists():
@@ -180,6 +183,8 @@ def kill_ffmpeg_warning(root, log_file):
     if is_mac_os():
         ffmpeg_kill_window.geometry("400x300")
     elif is_windows_os():
+        ffmpeg_kill_window.geometry("400x400")
+    elif is_linux_os():
         ffmpeg_kill_window.geometry("400x400")
     ffmpeg_kill_window.title("Safely Quit Program")
 
@@ -304,9 +309,11 @@ def inspect_video_files(directory, video_list, tkinter_window, listbox_completed
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=0x08000000)
                 g_ffmpeg_pid = proc.pid
                 g_ffmpeg_pid_var.set(f"FFMPEG PID: {g_ffmpeg_pid}")
-            else:
-                # Linux not yet supported
-                exit()
+            elif is_linux_os():
+                cmd = [ffmpeg_path, '-v', 'error', '-i', video.full_filepath, '-f', 'null', '-']
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                g_ffmpeg_pid = proc.pid
+                g_ffmpeg_pid_var.set(f"FFMPEG PID: {g_ffmpeg_pid}")
 
             output, error = proc.communicate()
             return_code = proc.returncode
@@ -440,6 +447,9 @@ def start_program(directory, video_list, root, index_start, log_file):
         elif is_windows_os():
             button_kill_ffmpeg = tk.Button(root, background='#E34234', foreground='white', text="Safely Quit", width=25, command=lambda: kill_ffmpeg_warning(root, log_file))
             button_kill_ffmpeg.pack(pady=(10, 5))
+        elif is_linux_os():
+            button_kill_ffmpeg = tk.Button(root, background='#E34234', foreground='white', text="Safely Quit", width=25, command=lambda: kill_ffmpeg_warning(root, log_file))
+            button_kill_ffmpeg.pack(pady=(10, 5))
 
         g_cpu_status.set("CPU: ---")
         label_cpu_status = tk.Label(root, textvariable=g_cpu_status, font=('Helvetica Bold', 12))
@@ -551,10 +561,6 @@ def afterDirectoryChosen(root, directory):
 
 # ========================= MAIN ==========================
 
-if is_linux_os():
-    # Linux not yet supported
-    exit()
-
 root = tk.Tk()
 root.title("Corrupt Video Inspector")
 if is_mac_os():
@@ -563,6 +569,8 @@ if is_windows_os():
     root.geometry("500x750")
     icon_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'icon.ico'))
     root.iconbitmap(default=icon_path)
+if is_linux_os():
+    root.geometry("500x750")
 g_progress = tk.StringVar()
 g_count = tk.StringVar()
 g_currently_processing = tk.StringVar()
