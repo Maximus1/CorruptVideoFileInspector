@@ -830,6 +830,8 @@ class py2app(Command):
         #   only one import per line
         #
         expected_missing_imports = set()
+        if ".." in filename:
+            raise Exception("Invalid file path")
         with open(filename, "r") as f:
             for line in f:
                 line = line.strip()
@@ -2207,6 +2209,8 @@ class py2app(Command):
         if not isinstance(bootstrap, basestring):
             return bootstrap.getvalue()
         else:
+            if ".." in bootstrap:
+                raise Exception("Invalid file path")
             if sys.version_info[0] == 2:
                 with open(bootstrap, "rU") as fp:
                     return fp.read()
@@ -2583,7 +2587,11 @@ class py2app(Command):
             fname = slashname + os.path.splitext(item.filename)[1]
             source = make_loader(fname)
             if not self.dry_run:
-                with open(pathname, "w") as fp:
+                base_real = os.path.realpath(self.temp_dir)
+                target_real = os.path.realpath(pathname)
+                if os.path.commonpath([base_real, target_real]) != base_real:
+                    raise Exception("Invalid file path")
+                with open(target_real, "w") as fp:
                     fp.write(source)
             else:
                 return
