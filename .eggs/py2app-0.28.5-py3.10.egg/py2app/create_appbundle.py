@@ -41,8 +41,12 @@ def create_appbundle(
     plist = {}
     plist.update(kw)
     plistPath = os.path.join(contents, "Info.plist")
-    if os.path.exists(plistPath):
-        with open(plistPath, "rb") as fp:
+    destdir_real = os.path.realpath(destdir)
+    plistPath_real = os.path.realpath(plistPath)
+    if os.path.commonpath([destdir_real, plistPath_real]) != destdir_real:
+        raise Exception("Invalid file path")
+    if os.path.exists(plistPath_real):
+        with open(plistPath_real, "rb") as fp:
             if hasattr(plistlib, "load"):
                 contents = plistlib.load(fp)
             else:
@@ -55,7 +59,7 @@ def create_appbundle(
     for d in dirs:
         makedirs(d)
 
-    with open(plistPath, "wb") as fp:
+    with open(plistPath_real, "wb") as fp:
         if hasattr(plistlib, "dump"):
             plistlib.dump(plist, fp)
         else:
@@ -71,7 +75,11 @@ def create_appbundle(
     else:
         destmain = os.path.join(platdir, kw["CFBundleExecutable"])
 
-    with open(os.path.join(contents, "PkgInfo"), "w") as fp:
+    pkginfo_path = os.path.join(contents, "PkgInfo")
+    pkginfo_path_real = os.path.realpath(pkginfo_path)
+    if os.path.commonpath([destdir_real, pkginfo_path_real]) != destdir_real:
+        raise Exception("Invalid file path")
+    with open(pkginfo_path_real, "w") as fp:
         fp.write(kw["CFBundlePackageType"] + kw["CFBundleSignature"])
 
     print("Copy %r -> %r" % (srcmain, destmain))
