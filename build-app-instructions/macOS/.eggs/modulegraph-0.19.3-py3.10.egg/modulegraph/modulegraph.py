@@ -268,6 +268,8 @@ def find_module(name, path=None):
 
         elif isinstance(importer, ImpImporter):
             filename = loader.filename
+            if ".." in filename:
+                raise Exception("Invalid file path")
             if filename.endswith(".pyc") or filename.endswith(".pyo"):
                 fp = open(filename, "rb")
                 description = (".pyc", "rb", imp.PY_COMPILED)
@@ -1088,6 +1090,8 @@ class ModuleGraph(ObjectGraph):
         source file, and will be scanned for dependencies.
         """
         self.msg(2, "run_script", pathname)
+        if ".." in pathname:
+            raise Exception("Invalid file path")
         pathname = os.path.realpath(pathname)
         m = self.findNode(pathname)
         if m is not None:
@@ -1604,6 +1608,8 @@ class ModuleGraph(ObjectGraph):
                     % (name, caller, level),
                 )
 
+                if ".." in caller.filename:
+                    raise Exception("Invalid file path")
                 with open(caller.filename, "rb") as caller_file:
                     encoding = util.guess_encoding(caller_file)
                 with open(
