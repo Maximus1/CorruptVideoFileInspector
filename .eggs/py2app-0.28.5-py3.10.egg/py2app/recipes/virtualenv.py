@@ -76,6 +76,8 @@ def check(cmd, mf):
     if m is None or m.filename is None:
         return None
 
+    if ".." in m.filename:
+        raise ValueError("Invalid file path")
     with open(m.filename, "r") as fp:
         contents = fp.read()
     if "virtualenv" in contents:
