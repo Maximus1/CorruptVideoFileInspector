@@ -49,7 +49,11 @@ def inspectVideoFiles(directory, tkinter_window, listbox_completed_videos, index
         if results_file_exists:
             os.remove(results_file_path)
 
-        results_file = open(results_file_path, 'a+', encoding="utf8", newline='')
+        base_real = os.path.realpath(directory)
+        target_real = os.path.realpath(results_file_path)
+        if os.path.commonpath([base_real, target_real]) != base_real:
+            raise Exception('Invalid file path')
+        results_file = open(target_real, 'a+', encoding="utf8", newline='')
         results_file_writer = csv.writer(results_file)
 
         header = ['Video File', 'Corrupted']
