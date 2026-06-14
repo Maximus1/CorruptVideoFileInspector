@@ -314,7 +314,11 @@ def inspect_video_files(directory, video_list, tkinter_window, listbox_completed
             os.remove(results_file_path)
 
         total_video_files = len(video_list)
-        with open(results_file_path, 'a' if index_start != 1 else 'w', encoding="utf8", newline='') as results_file:
+        base_real = os.path.realpath(directory)
+        target_real = os.path.realpath(results_file_path)
+        if os.path.commonpath([base_real, target_real]) != base_real:
+            raise Exception('Invalid file path')
+        with open(target_real, 'a' if index_start != 1 else 'w', encoding="utf8", newline='') as results_file:
             results_file_writer = csv.writer(results_file)
             if index_start == 1:
                 results_file_writer.writerow(['Video File', 'Corrupted'])
@@ -473,7 +477,11 @@ def start_program(directory, video_list, root, index_start):  # pylint: disable=
         if index_start == 1 and os.path.isfile(log_file_path):
             os.remove(log_file_path)
 
-        log_file = open(log_file_path, 'a', encoding="utf8")
+        base_real = os.path.realpath(directory)
+        target_real = os.path.realpath(log_file_path)
+        if os.path.commonpath([base_real, target_real]) != base_real:
+            raise Exception('Invalid file path')
+        log_file = open(target_real, 'a', encoding="utf8")
 
         # Logging Header
         log_file.write('=================================================================\n')
